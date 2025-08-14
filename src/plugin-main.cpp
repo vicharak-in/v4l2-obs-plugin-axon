@@ -1,7 +1,8 @@
 #include <obs-module.h>
+#include <util/platform.h>
 #include <plugin-support.h>
-
 #include <linux/videodev2.h>
+#include <alsa/asoundlib.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -22,6 +23,10 @@ MODULE_EXPORT const char* obs_module_description(void)
 }
 
 #define BUFFER_COUNT 4
+#define AUDIO_SAMPLE_RATE 48000
+#define AUDIO_CHANNELS 2
+#define AUDIO_FORMAT SND_PCM_FORMAT_S16_LE
+#define AUDIO_FRAMES 1024
 
 struct buffer {
     void*  start[VIDEO_MAX_PLANES];
@@ -57,6 +62,12 @@ struct v4l2_mplane_source {
     pthread_mutex_t frame_lock;
     pthread_mutex_t io_lock;
     volatile bool   reconfiguring;
+
+    /* audio state */
+    snd_pcm_t*    pcm_handle;
+    char          alsa_device[64];
+    pthread_t     audio_thread;
+    volatile bool audio_running;
 };
 
 static void zero_buffers(struct v4l2_mplane_source* s)
@@ -192,6 +203,53 @@ static void nv12_to_bgra(uint8_t* dst, const uint8_t* y_plane, const uint8_t* uv
     }
 }
 
+static void* audio_thread_fn(void* arg)
+{
+    struct v4l2_mplane_source* s        = (v4l2_mplane_source*) arg;
+    size_t                     buf_size = AUDIO_FRAMES * AUDIO_CHANNELS * sizeof(int16_t);
+    int16_t*                   buffer   = (int16_t*) bmalloc(buf_size);
+
+    while (s->audio_running) {
+        snd_pcm_sframes_t frames_read = snd_pcm_readi(s->pcm_handle, buffer, AUDIO_FRAMES);
+        blog(LOG_INFO, "[audio] frames_read=%ld", (long) frames_read);
+        if (frames_read < 0) {
+            snd_pcm_prepare(s->pcm_handle);
+            continue;
+        } else {
+            int16_t max_sample = 0;
+            for (int i = 0; i < frames_read * AUDIO_CHANNELS; i++) {
+                if (abs(buffer[i]) > max_sample)
+                    max_sample = abs(buffer[i]);
+            }
+            blog(LOG_INFO, "[audio] max sample = %d", max_sample);
+        }
+
+        struct obs_source_audio ad = {0};
+        ad.data[0]                 = (uint8_t*) buffer;
+        ad.frames                  = (uint32_t) frames_read;
+        ad.samples_per_sec         = AUDIO_SAMPLE_RATE;
+        ad.speakers                = SPEAKERS_STEREO;
+        ad.format                  = AUDIO_FORMAT_16BIT;
+
+        static uint64_t audio_start_ts    = 0;
+        static uint64_t audio_frame_count = 0;
+
+        if (audio_start_ts == 0)
+            audio_start_ts = os_gettime_ns();
+
+        ad.timestamp = audio_start_ts + (audio_frame_count * 1000000000ULL / AUDIO_SAMPLE_RATE);
+
+        audio_frame_count += frames_read;
+
+        blog(LOG_INFO, "[audio] frames_read=%ld", (long) frames_read);
+
+        obs_source_output_audio(s->source, &ad);
+    }
+
+    bfree(buffer);
+    return NULL;
+}
+
 static bool start_device(struct v4l2_mplane_source* s)
 {
     if (!s)
@@ -201,6 +259,25 @@ static bool start_device(struct v4l2_mplane_source* s)
     if (s->fd < 0) {
         blog(LOG_ERROR, "[axon] Failed to open %s: %s", s->device_path, strerror(errno));
         return false;
+    }
+
+    // audio setup
+    snprintf(s->alsa_device, sizeof(s->alsa_device), "hw:0,0");
+    if (snd_pcm_open(&s->pcm_handle, s->alsa_device, SND_PCM_STREAM_CAPTURE, 0) < 0) {
+        blog(LOG_ERROR, "Failed to open ALSA device");
+        s->pcm_handle = NULL;
+    } else {
+        blog(LOG_INFO, "Opened ASLA device successfully");
+        if (snd_pcm_set_params(s->pcm_handle, AUDIO_FORMAT, SND_PCM_ACCESS_RW_INTERLEAVED,
+                               AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, 1, 500000)) {
+            blog(LOG_ERROR, "Failed to set ALSA params");
+            return false;
+        };
+        snd_pcm_prepare(s->pcm_handle);
+        snd_pcm_start(s->pcm_handle);
+
+        s->audio_running = true;
+        pthread_create(&s->audio_thread, NULL, audio_thread_fn, s);
     }
 
     struct v4l2_format fmt;
@@ -627,7 +704,7 @@ static void mplane_destroy(void* data)
 static struct obs_source_info mplane_source_info = {
     .id             = "v4l2_mplane_source_axon",
     .type           = OBS_SOURCE_TYPE_INPUT,
-    .output_flags   = OBS_SOURCE_VIDEO,
+    .output_flags   = OBS_SOURCE_VIDEO | OBS_SOURCE_AUDIO,
     .get_name       = mplane_get_name,
     .create         = mplane_create,
     .destroy        = mplane_destroy,
