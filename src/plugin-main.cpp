@@ -224,6 +224,16 @@ static void* audio_thread_fn(void* arg)
             blog(LOG_INFO, "[audio] max sample = %d", max_sample);
         }
 
+        float boost = 24.0f;
+        for (int i = 0; i < frames_read * AUDIO_CHANNELS; i++) {
+            int32_t tmp = (int32_t) buffer[i] * boost;
+            if (tmp > 32767)
+                tmp = 32767;
+            if (tmp < -32768)
+                tmp = -32768;
+            buffer[i] = (int16_t) tmp;
+        }
+
         struct obs_source_audio ad = {0};
         ad.data[0]                 = (uint8_t*) buffer;
         ad.frames                  = (uint32_t) frames_read;
