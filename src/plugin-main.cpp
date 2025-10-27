@@ -494,6 +494,7 @@ static void* mplane_create(obs_data_t* settings, obs_source_t* source)
     const char* res_str = obs_data_get_string(settings, "resolution");
 
     int w = 640, h = 480;
+    // int w = 1280, h = 720;
     if (res_str) {
         if (strcmp(res_str, "1920x1080") == 0) {
             w = 1920;
@@ -530,6 +531,7 @@ static void mplane_update(void* data, obs_data_t* settings)
     const char* res_str = obs_data_get_string(settings, "resolution");
 
     int w = 640, h = 480;
+    // int w = 1280, h = 720;
     if (res_str) {
         if (!strcmp(res_str, "1920x1080")) {
             w = 1920;
@@ -663,6 +665,7 @@ static void mplane_get_defaults(obs_data_t* settings)
 {
     obs_data_set_default_string(settings, "device_path", "/dev/video11");
     obs_data_set_default_string(settings, "resolution", "640x480");
+    // obs_data_set_default_string(settings, "resolution", "1280x720");
 }
 
 static obs_properties_t* mplane_get_properties(void* unused)
@@ -672,8 +675,8 @@ static obs_properties_t* mplane_get_properties(void* unused)
 
     obs_property_t* res = obs_properties_add_list(props, "resolution", "Resolution",
                                                   OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-    obs_property_list_add_string(res, "1920x1080", "1920x1080");
-    obs_property_list_add_string(res, "1280x720", "1280x720");
+    // obs_property_list_add_string(res, "1920x1080", "1920x1080");
+    // obs_property_list_add_string(res, "1280x720", "1280x720");
     obs_property_list_add_string(res, "640x480", "640x480");
 
     obs_property_t* p = obs_properties_add_list(props, "device_path", "Video Device",
