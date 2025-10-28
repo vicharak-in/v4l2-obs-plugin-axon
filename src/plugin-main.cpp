@@ -133,7 +133,8 @@ static void destroy_rgb(struct v4l2_mplane_source* s)
 
 static bool alloc_rgb_and_texture(struct v4l2_mplane_source* s)
 {
-    size_t rgb_size = (size_t) s->width * (size_t) s->height * 4;
+    // size_t rgb_size = (size_t) s->width * (size_t) s->height * 4;
+    size_t rgb_size = (size_t) s->y_stride * (size_t) s->height * 4;
 
     destroy_rgb(s);
 
@@ -171,8 +172,8 @@ static void nv12_to_bgra(uint8_t* dst, const uint8_t* y_plane, const uint8_t* uv
 
         for (int i = 0; i < width; i++) {
             int y = y_row[i];
-            int u = uv_row[i & ~1] - 128;
-            int v = uv_row[(i & ~1) + 1] - 128;
+            int u = uv_row[(i / 2) * 2] - 128;
+            int v = uv_row[(i / 2) * 2 + 1] - 128;
 
             int c = y - 16;
             int d = u;
@@ -210,8 +211,12 @@ static void* audio_thread_fn(void* arg)
     int16_t*                   buffer   = (int16_t*) bmalloc(buf_size);
 
     while (s->audio_running) {
+        if (!s->pcm_handle) {
+            break;
+        }
+
         snd_pcm_sframes_t frames_read = snd_pcm_readi(s->pcm_handle, buffer, AUDIO_FRAMES);
-        blog(LOG_INFO, "[audio] frames_read=%ld", (long) frames_read);
+        // blog(LOG_INFO, "[audio] frames_read=%ld", (long) frames_read);
         if (frames_read < 0) {
             snd_pcm_prepare(s->pcm_handle);
             continue;
@@ -221,7 +226,7 @@ static void* audio_thread_fn(void* arg)
                 if (abs(buffer[i]) > max_sample)
                     max_sample = abs(buffer[i]);
             }
-            blog(LOG_INFO, "[audio] max sample = %d", max_sample);
+            // blog(LOG_INFO, "[audio] max sample = %d", max_sample);
         }
 
         float boost = 24.0f;
@@ -251,7 +256,7 @@ static void* audio_thread_fn(void* arg)
 
         audio_frame_count += frames_read;
 
-        blog(LOG_INFO, "[audio] frames_read=%ld", (long) frames_read);
+        // blog(LOG_INFO, "[audio] frames_read=%ld", (long) frames_read);
 
         obs_source_output_audio(s->source, &ad);
     }
@@ -273,6 +278,9 @@ static bool start_device(struct v4l2_mplane_source* s)
 
     // audio setup
     snprintf(s->alsa_device, sizeof(s->alsa_device), "hw:0,0");
+    s->pcm_handle    = NULL;
+    s->audio_running = false;
+
     if (snd_pcm_open(&s->pcm_handle, s->alsa_device, SND_PCM_STREAM_CAPTURE, 0) < 0) {
         blog(LOG_ERROR, "Failed to open ALSA device");
         s->pcm_handle = NULL;
@@ -437,6 +445,9 @@ static bool start_device(struct v4l2_mplane_source* s)
         return false;
     }
 
+    blog(LOG_INFO, "[axon] Negotiated format: %dx%d, planes=%d, y_stride=%d, uv_stride=%d",
+         s->width, s->height, s->num_planes, s->y_stride, s->uv_stride);
+
     return true;
 }
 
@@ -444,6 +455,17 @@ static void stop_device(struct v4l2_mplane_source* s)
 {
     if (!s)
         return;
+
+    if (s->audio_running) {
+        s->audio_running = false;
+        pthread_join(s->audio_thread, NULL);
+    }
+
+    if (s->pcm_handle) {
+        snd_pcm_drop(s->pcm_handle);
+        snd_pcm_close(s->pcm_handle);
+        s->pcm_handle = NULL;
+    }
 
     stop_streaming(s->fd);
     free_mapped_buffers(s);
@@ -530,7 +552,9 @@ static void mplane_update(void* data, obs_data_t* settings)
     const char* dev     = obs_data_get_string(settings, "device_path");
     const char* res_str = obs_data_get_string(settings, "resolution");
 
-    int w = 640, h = 480;
+    int w = s->width;
+    int h = s->height;
+    // int w = 640, h = 480;
     // int w = 1280, h = 720;
     if (res_str) {
         if (!strcmp(res_str, "1920x1080")) {
@@ -539,6 +563,9 @@ static void mplane_update(void* data, obs_data_t* settings)
         } else if (!strcmp(res_str, "1280x720")) {
             w = 1280;
             h = 720;
+        } else if (!strcmp(res_str, "640x480")) {
+            w = 640;
+            h = 480;
         }
     }
 
@@ -546,27 +573,42 @@ static void mplane_update(void* data, obs_data_t* settings)
     bool        dev_changed = strcmp(s->device_path, dev_safe) != 0;
     bool        res_changed = (w != s->width) || (h != s->height);
 
-    if (!dev_changed && !res_changed)
+    if (!dev_changed && !res_changed) {
+        blog(LOG_INFO, "[axon] Requested format %dx%d NV12 not available", s->width, s->height);
         return;
+    }
 
     s->reconfiguring = true;
+
     pthread_mutex_lock(&s->io_lock);
+    pthread_mutex_lock(&s->frame_lock);
+
+    stop_device(s);
+    os_sleep_ms(100);
+    destroy_texture(s);
+    destroy_rgb(s);
 
     snprintf(s->device_path, sizeof(s->device_path), "%s", dev_safe);
     s->width  = w;
     s->height = h;
 
-    stop_device(s);
-
-    destroy_texture(s);
-    destroy_rgb(s);
-
-    if (!start_device(s)) {
+    bool started = start_device(s);
+    if (started && s->rgb_front) {
+        memset(s->rgb_front, 0, (size_t) s->width * (size_t) s->height * 4);
+        s->new_frame = false;
+        blog(LOG_INFO, "[axon] Reconfigured successfully to %dx%d", s->width, s->height);
+    } else {
         blog(LOG_ERROR, "[axon] Reconfigure failed");
     }
 
+    pthread_mutex_unlock(&s->frame_lock);
     pthread_mutex_unlock(&s->io_lock);
+
     s->reconfiguring = false;
+
+    if (!started) {
+        blog(LOG_ERROR, "[axon] Reconfigure failed");
+    }
 }
 
 static void mplane_tick(void* data, float seconds)
@@ -575,8 +617,10 @@ static void mplane_tick(void* data, float seconds)
     struct v4l2_mplane_source* s = (struct v4l2_mplane_source*) data;
     if (!s)
         return;
-    if (s->reconfiguring)
+    if (s->reconfiguring) {
+        os_sleep_ms(5);
         return;
+    }
     if (s->fd < 0)
         return;
 
@@ -675,8 +719,8 @@ static obs_properties_t* mplane_get_properties(void* unused)
 
     obs_property_t* res = obs_properties_add_list(props, "resolution", "Resolution",
                                                   OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-    // obs_property_list_add_string(res, "1920x1080", "1920x1080");
-    // obs_property_list_add_string(res, "1280x720", "1280x720");
+    obs_property_list_add_string(res, "1920x1080", "1920x1080");
+    obs_property_list_add_string(res, "1280x720", "1280x720");
     obs_property_list_add_string(res, "640x480", "640x480");
 
     obs_property_t* p = obs_properties_add_list(props, "device_path", "Video Device",
