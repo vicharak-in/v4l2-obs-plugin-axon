@@ -726,7 +726,7 @@ static obs_properties_t* mplane_get_properties(void* unused)
     obs_property_t* p = obs_properties_add_list(props, "device_path", "Video Device",
                                                 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 
-    for (int i = 0; i < 20; i++) {
+    for (int i = 0; i < 25; i++) {
         char path[64];
         snprintf(path, sizeof(path), "/dev/video%d", i);
         if (access(path, F_OK) == 0) {
