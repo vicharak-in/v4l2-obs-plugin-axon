@@ -19,6 +19,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y cmake build-essential gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt install libobs-dev libasound2-dev
 
       - name: Create build directory
         run: mkdir -p build-arm64
