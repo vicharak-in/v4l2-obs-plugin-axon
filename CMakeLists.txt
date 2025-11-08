@@ -17,6 +17,9 @@ find_package(libobs REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE asound)
 
+find_package(OpenCL REQUIRED)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OpenCL::OpenCL)
+
 if(ENABLE_FRONTEND_API)
   find_package(obs-frontend-api REQUIRED)
   target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
