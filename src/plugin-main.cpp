@@ -275,15 +275,13 @@ static void axon_cl_convert_nv12_to_bgra(struct axon_cl_ctx* cl, const uint8_t* 
     }
 
     size_t global[2] = {(size_t) width, (size_t) height};
-    size_t local[2] = {16, 8};
+    size_t local[2]  = {16, 8};
 
     err = clEnqueueNDRangeKernel(cl->queue, cl->kernel, 2, NULL, global, local, 0, NULL, NULL);
     if (err != CL_SUCCESS) {
         blog(LOG_ERROR, "[axon] Kernel launch failed: %d", err);
         return;
     }
-
-    clFlush(cl->queue);
 
     cl_event evt = NULL;
     err = clEnqueueReadBuffer(cl->queue, cl->dev_out, CL_FALSE, 0, out_bytes, dst, 0, NULL, &evt);
@@ -292,7 +290,8 @@ static void axon_cl_convert_nv12_to_bgra(struct axon_cl_ctx* cl, const uint8_t* 
         return;
     }
 
-    clWaitForEvents(1, &evt);
+    clFlush(cl->queue);
+    // clWaitForEvents(1, &evt);
     clReleaseEvent(evt);
 }
 
@@ -327,11 +326,11 @@ static void axon_cl_convert_nv24_to_bgra(struct axon_cl_ctx* cl, const uint8_t* 
     if (err != CL_SUCCESS)
         blog(LOG_ERROR, "[axon] Kernel launch failed: %d", err);
 
-    clFlush(cl->queue);
-
     cl_event evt = NULL;
     clEnqueueReadBuffer(cl->queue, cl->dev_out, CL_FALSE, 0, out_bytes, dst, 0, NULL, &evt);
-    clWaitForEvents(1, &evt);
+
+    clFlush(cl->queue);
+    // clWaitForEvents(1, &evt);
 
     clReleaseEvent(evt);
 }
@@ -427,7 +426,6 @@ static bool alloc_rgb_and_texture(struct v4l2_mplane_source* s)
 
     return true;
 }
-
 
 static void* audio_thread_fn(void* arg)
 {
@@ -761,9 +759,9 @@ static void* mplane_create(obs_data_t* settings, obs_source_t* source)
         } else if (strcmp(res_str, "640x480") == 0) {
             w = 640;
             h = 480;
-        } else if (strcmp(res_str, "1440x900") == 0) {
-            w = 1440;
-            h = 900;
+        } else if (strcmp(res_str, "4096x2160") == 0) {
+            w = 4096;
+            h = 2160;
         }
     }
 
@@ -804,9 +802,9 @@ static void mplane_update(void* data, obs_data_t* settings)
         } else if (!strcmp(res_str, "640x480")) {
             w = 640;
             h = 480;
-        } else if (!strcmp(res_str, "1440x900")) {
-            w = 1440;
-            h = 900;
+        } else if (!strcmp(res_str, "4096x2160")) {
+            w = 4096;
+            h = 2160;
         }
     }
 
@@ -986,7 +984,9 @@ static obs_properties_t* mplane_get_properties(void* unused)
 
     obs_property_t* res = obs_properties_add_list(props, "resolution", "Resolution",
                                                   OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+    obs_property_list_add_string(res, "1280x720", "1280x720");
     obs_property_list_add_string(res, "1920x1080", "1920x1080");
+    obs_property_list_add_string(res, "4096x2160", "4096x2160");
 
     obs_property_t* p = obs_properties_add_list(props, "device_path", "Video Device",
                                                 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
